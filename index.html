@@ -1364,6 +1364,7 @@ body {
   </div>
   <div class="popover-actions">
     <button class="popover-btn" id="diffDownloadBtn">Download (.txt)</button>
+    <button class="popover-btn" id="diffNewWindowBtn">Show in separate window</button>
     <button class="popover-btn reject" id="diffDismissBtn">Close</button>
   </div>
 </div>
@@ -2368,6 +2369,10 @@ customAskBtn.addEventListener('click', handleCustomAsk);
 const viewDiffShortcutBtn = document.getElementById('viewDiffShortcutBtn');
 if (viewDiffShortcutBtn) {
   viewDiffShortcutBtn.addEventListener('click', showGlobalDiffModal);
+}
+const diffNewWindowBtn = document.getElementById('diffNewWindowBtn');
+if (diffNewWindowBtn) {
+  diffNewWindowBtn.addEventListener('click', showGlobalDiffInNewWindow);
 }
 if (customPromptBtn) {
   customPromptBtn.addEventListener('click', openCustomPromptModal);
@@ -4117,7 +4122,7 @@ function mapCorrectionsStably(correctionsArray, text, baseOffset = 0) {
   return { mappedCorrections: mapped, unmatchedCorrections: unmatched };
 }
 
-function buildAlignedDiffBlocks(oldText, newText) {
+function computeLineOps(oldText, newText) {
   const oldLines = (oldText || '').split(/\r?\n/);
   const newLines = (newText || '').split(/\r?\n/);
   const n = oldLines.length;
@@ -4136,32 +4141,58 @@ function buildAlignedDiffBlocks(oldText, newText) {
     }
   }
 
-  // Backtrack to ops
+  // Walk forward from (0,0), emitting ops
   const ops = [];
-  let i = n, j = m;
-  while (i > 0 && j > 0) {
-    if (oldLines[i - 1] === newLines[j - 1]) {
-      ops.push({ type: 'equal', line: oldLines[i - 1], oldIndex: i - 1, newIndex: j - 1 });
-      i--; j--;
-    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
-      ops.push({ type: 'delete', line: oldLines[i - 1], oldIndex: i - 1 });
-      i--;
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (oldLines[i] === newLines[j]) {
+      ops.push({
+        type: 'equal',
+        oldLine: oldLines[i],
+        newLine: newLines[j],
+        oldIndex: i,
+        newIndex: j
+      });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({
+        type: 'delete',
+        oldLine: oldLines[i],
+        oldIndex: i
+      });
+      i++;
     } else {
-      ops.push({ type: 'insert', line: newLines[j - 1], newIndex: j - 1 });
-      j--;
+      ops.push({
+        type: 'insert',
+        newLine: newLines[j],
+        newIndex: j
+      });
+      j++;
     }
   }
-  while (i > 0) {
-    ops.push({ type: 'delete', line: oldLines[i - 1], oldIndex: i - 1 });
-    i--;
+  while (i < n) {
+    ops.push({
+      type: 'delete',
+      oldLine: oldLines[i],
+      oldIndex: i
+    });
+    i++;
   }
-  while (j > 0) {
-    ops.push({ type: 'insert', line: newLines[j - 1], newIndex: j - 1 });
-    j--;
+  while (j < m) {
+    ops.push({
+      type: 'insert',
+      newLine: newLines[j],
+      newIndex: j
+    });
+    j++;
   }
-  ops.reverse();
 
-  // Merge into blocks (replace = delete + insert)
+  return { ops, oldLines, newLines };
+}
+
+function buildAlignedDiffBlocks(oldText, newText) {
+  const { ops } = computeLineOps(oldText, newText);
   const blocks = [];
   for (let k = 0; k < ops.length; k++) {
     const op = ops[k];
@@ -4170,15 +4201,15 @@ function buildAlignedDiffBlocks(oldText, newText) {
     if (op.type === 'delete' && ops[k + 1] && ops[k + 1].type === 'insert') {
       const ins = ops[k + 1];
       blocks.push({
-        oldLine: op.line,
-        newLine: ins.line,
+        oldLine: op.oldLine,
+        newLine: ins.newLine,
         oldIndex: op.oldIndex,
         newIndex: ins.newIndex
       });
       k++; // skip next
     } else if (op.type === 'delete') {
       blocks.push({
-        oldLine: op.line,
+        oldLine: op.oldLine,
         newLine: '',
         oldIndex: op.oldIndex,
         newIndex: null
@@ -4186,31 +4217,27 @@ function buildAlignedDiffBlocks(oldText, newText) {
     } else if (op.type === 'insert') {
       blocks.push({
         oldLine: '',
-        newLine: op.line,
+        newLine: op.newLine,
         oldIndex: null,
         newIndex: op.newIndex
       });
     }
   }
-
   return blocks;
 }
 
 function computeLineDiff(oldText, newText) {
-  const oldLines = (oldText || '').split(/\r?\n/);
-  const newLines = (newText || '').split(/\r?\n/);
-  const maxLen = Math.max(oldLines.length, newLines.length);
+  const { ops } = computeLineOps(oldText, newText);
   const diff = ['--- old', '+++ new'];
-  for (let i = 0; i < maxLen; i++) {
-    const oldLine = oldLines[i];
-    const newLine = newLines[i];
-    if (oldLine === newLine) {
-      diff.push(` ${oldLine !== undefined ? oldLine : ''}`);
-    } else {
-      if (oldLine !== undefined) diff.push(`-${oldLine}`);
-      if (newLine !== undefined) diff.push(`+${newLine}`);
+  ops.forEach(op => {
+    if (op.type === 'equal') {
+      diff.push(` ${op.oldLine !== undefined ? op.oldLine : ''}`);
+    } else if (op.type === 'delete') {
+      diff.push(`-${op.oldLine}`);
+    } else if (op.type === 'insert') {
+      diff.push(`+${op.newLine}`);
     }
-  }
+  });
   return diff.join('\n');
 }
 
@@ -4627,33 +4654,48 @@ function showGlobalDiffModal() {
     let hasDiff = false;
     visualRows.forEach(row => {
       hasDiff = true;
-      const diff = diffWords(row.oldLine || '', row.newLine || '');
+      const hasOld = row.oldIndex !== null && row.oldIndex !== undefined && row.oldLine !== undefined;
+      const hasNew = row.newIndex !== null && row.newIndex !== undefined && row.newLine !== undefined;
+      const replaceDiff = diffWords(row.oldLine || '', row.newLine || '');
       const wrapper = document.createElement('div');
       wrapper.className = 'diff-row';
       const title = document.createElement('h4');
-      const lineLabelParts = [];
-      if (row.oldIndex !== null && row.oldIndex !== undefined) lineLabelParts.push(`Old ${row.oldIndex + 1}`);
-      if (row.newIndex !== null && row.newIndex !== undefined) lineLabelParts.push(`New ${row.newIndex + 1}`);
-      title.textContent = lineLabelParts.length ? `Line ${lineLabelParts.join(' → ')}` : 'Changed';
+      let label = 'Changed';
+      if (hasOld && hasNew) {
+        label = `Old ${row.oldIndex + 1} → New ${row.newIndex + 1}`;
+      } else if (hasOld) {
+        label = `Deleted (Old ${row.oldIndex + 1})`;
+      } else if (hasNew) {
+        label = `Inserted (New ${row.newIndex + 1})`;
+      }
+      title.textContent = label;
       const pair = document.createElement('div');
       pair.className = 'diff-pair';
 
-      const orig = document.createElement('div');
-      orig.className = 'diff-cell';
-      orig.innerHTML = diff.originalHtml || '';
+      if (hasOld) {
+        const orig = document.createElement('div');
+        orig.className = 'diff-cell';
+        const d = hasNew ? replaceDiff : diffWords(row.oldLine || '', '');
+        orig.innerHTML = d.originalHtml || '';
+        pair.appendChild(orig);
+      }
 
-      const arrow = document.createElement('div');
-      arrow.style.minWidth = '24px';
-      arrow.style.textAlign = 'center';
-      arrow.textContent = '→';
+      if (hasOld && hasNew) {
+        const arrow = document.createElement('div');
+        arrow.style.minWidth = '24px';
+        arrow.style.textAlign = 'center';
+        arrow.textContent = '→';
+        pair.appendChild(arrow);
+      }
 
-      const corr = document.createElement('div');
-      corr.className = 'diff-cell';
-      corr.innerHTML = diff.correctedHtml || '';
+      if (hasNew) {
+        const corr = document.createElement('div');
+        corr.className = 'diff-cell';
+        const d = hasOld ? replaceDiff : diffWords('', row.newLine || '');
+        corr.innerHTML = d.correctedHtml || '';
+        pair.appendChild(corr);
+      }
 
-      pair.appendChild(orig);
-      pair.appendChild(arrow);
-      pair.appendChild(corr);
       wrapper.appendChild(title);
       wrapper.appendChild(pair);
       diffContent.appendChild(wrapper);
@@ -4666,6 +4708,33 @@ function showGlobalDiffModal() {
   }
   if (diffModal) diffModal.classList.add('visible');
   if (diffOverlay) diffOverlay.classList.add('visible');
+}
+
+// Open a simple standalone diff window (placeholder content for now)
+function showGlobalDiffInNewWindow() {
+  if (!originalDocumentText) {
+    alert('No baseline document is available yet. Load a file, the sample, or run an analysis to set a baseline.');
+    return;
+  }
+  const currentText = documentInput.value || '';
+  if (currentText === originalDocumentText) {
+    alert('No differences found between baseline and current document.');
+    return;
+  }
+
+  const diffBody = computeLineDiff(originalDocumentText, currentText);
+  const win = window.open('', '_blank', 'noopener,noreferrer');
+  if (!win) {
+    alert('Popup blocked. Please allow popups to view the diff in a new window.');
+    return;
+  }
+  win.document.write(
+    '<!DOCTYPE html><html><head><title>Global Diff</title></head><body>' +
+    '<pre style="white-space:pre-wrap; font-family:monospace;">' +
+    escapeHtml(diffBody) +
+    '</pre></body></html>'
+  );
+  win.document.close();
 }
 
 function hideDiffModal() {
