@@ -1,78 +1,61 @@
-# ModernEditor, Kevin Bryan, July 2025, MIT License
-Original by Kevin Bryan  
-Revised by Stephan Lauermann
+# ModernEditor (OpenAI GPT-5 port, MIT)
 
-# Modern Editor (OpenAI GPT-5 port)
+Original: Kevin Bryan (July 2025)  
+Port/maintainer: Stephan Lauermann  
 
-Browser-based editor that runs grammar, style, simplification, and proof checks with OpenAI GPT-5 models. Paste or upload text, pick a style, and accept/reject inline suggestions with keyboard shortcuts. API key is optional; you can work fully offline by importing precomputed JSON corrections.
+ModernEditor is a browser-based editor for LaTeX/Markdown/plain text with inline GPT-assisted editing. It runs grammar, style, simplification, and proof checks; it can also run Python to check math and search the web when enabled. You can accept/reject/edit each suggestion, and you can work fully offline by importing precomputed JSON corrections.
 
-## Features
-- Grammar & spelling, style (multiple presets + custom), simplification (3 variants), and proof checking for highlighted math/logic.
-- Inline navigation for suggestions (←/→), accept (Enter), reject (Backspace/Delete), and undo.
-- Model picker: GPT-5.1 (thinking), GPT-5-pro, or GPT-4.1-mini for any task.
-- Custom Ask: select text, enter an instruction, and get a comment plus optional suggestions (selection-only; context is read-only).
-- Import / Example: pick Structured JSON (offline), Unstructured Comments (API), or Example (offline) which loads the sample document plus sample corrections so you can see highlights without calling the model.
-- Custom / User instructions: open the modal, choose one or more presets (grammar, style, math, consistency, clarity), tweak the text, pick scope (selection/full/auto) and aggressiveness, then run a custom check without retyping prompts.
-- Autosave + session restore: the editor snapshots text, corrections, and undo history into local storage, and the hamburger menu exposes explicit “Save Session” / “Load Session” actions for roaming between browsers.
-- Drag/drop or file picker for .txt/.tex, copy/download of edited text.
-- No built-in preview: the previous rough preview was removed for reliability; use your usual LaTeX/PDF workflow to view rendered output.
+---
+
+## Quickstart
+1) Open `index.html` in a modern browser. No build or server needed.  
+2) API key (for live calls): enter it in the startup modal (session-only) or preload `window.OPENAI_API_KEY` in `keys.js`.  
+   - Offline: skip the key and use Import → Structured JSON or the built-in Example.  
+3) Load text: paste, or Menu → Load New Document (`.tex`/`.txt`).  
+4) Run checks: left toolbar → Grammar, Style, or Custom Task.  
+5) Apply suggestions: highlights appear inline; use arrow keys or buttons, edit if needed, then Enter to accept or Backspace/Delete to reject. Undo restores the prior state.
+
+---
+
+## Highlights & shortcuts
+- Inline navigation: `←` / `→` previous/next; `Enter` accept; `Backspace/Delete` reject; `E` edit the suggested text; `Esc` exits editing.  
+- Shortcuts only hijack keys when corrections are active and focus isn’t in another input. Locked editor accepts shortcuts; real inputs keep normal behavior.
+
+---
+
+## What it can do
+- Grammar & spelling: context- and LaTeX-aware; language selector (English variants, French, German, Spanish, Catalan, …).
+- Style: built-in rules (e.g., academic style) plus custom instructions (scope/aggressiveness).  
+- Selection tools: Simplify (3 brevity levels), Proof check (beta), Custom Ask on selected text.  
+- LaTeX handling: full runs strip the preamble (`\begin{document}`…`\end{document}`) for analysis; corrections are mapped back with offsets; LaTeX commands/math are preserved. Selections send surrounding text as read-only context.  
+- Models/tools: GPT-5.1 (thinking variants), GPT-5-pro, GPT-4.1-mini. GPT-5.1 can optionally enable web search and Python (default off). Token/cost info is shown in the menu’s run log (and also logged to the console).  
+- Import/offline: Structured JSON corrections; Unstructured Comments → structured corrections; built-in Example to demo without API calls.  
+- Diff/session: baseline tracking; Global Diff modal + download; autosave/session restore (also manual save/load `.json`).
+
+---
+
+## JSON contracts (for imports or running models elsewhere)
+- Corrections schema (grammar/style/custom): one object with a `corrections` array of `{ original, corrected, explanation, type }`. Types: `grammar`, `style`, or `comment`. Empty = `{"corrections":[]}`.  
+- Simplify: `{ same_length, moderate, concise }` strings.  
+- Proof: `{ is_valid, issues[], questions[], suggestions[], overall }`.  
+- Custom Ask: `{ comment, suggestions[] }`.
+
+---
+
+## Key handling
+- Default path: enter key in the modal (session-only).  
+- Preload: set `window.OPENAI_API_KEY` in `keys.js` if you choose; external key loading is otherwise off by default.  
+- Offline: no key needed when importing JSON.
+
+---
 
 ## Requirements
-- Modern browser; no build step required.
-- Live API calls need an OpenAI API key with access to the chosen models. If you skip the key, you can still edit by importing precomputed JSON corrections manually.
+- Modern browser (Chrome/Firefox/Safari/Edge).  
+- API key with access to chosen models for live calls; none needed for offline imports.
 
-## Run it
-1. Open `index.html` in a browser.
-2. At startup you can:
-   - Enter an API key (for in-app calls), or
-   - Preload `window.OPENAI_API_KEY` in `keys.js` (e.g., from macOS keychain), or
-   - Skip the key and later use the Import / Example button to load structured JSON or the built-in example offline.
-3. Import options:
-   - Structured JSON (offline): paste a `{ "corrections": [...] }` payload generated by ChatGPT or another tool (see `sample_comments.json`).
-   - Unstructured Comments (API): paste reviewer feedback (see `input/example-unstructured-comments.md`) and let the app convert it to corrections.
-   - Example (offline): loads the sample document and sample corrections to show the highlight workflow instantly.
+---
 
-## Model selection
-- Choose the model under Menu → Model: GPT-5.1 (thinking), GPT-5-pro, or GPT-4.1-mini.
-- Reasoning effort defaults: low (grammar), medium (style), high (simplify/proof) when using GPT-5.1. GPT-5-pro runs without an explicit reasoning knob; mini uses no reasoning block.
- - Pricing note: we only log token counts (and optional estimated cost) to the console; no built‑in spend limits/alerts yet.
-
-## Usage
-- Click Grammar or Style to run checks. For style, pick a rule (e.g., Literary Nonfiction) first.
-- Use Import / Example to load structured JSON, unstructured comments, or the offline example (sample doc + sample corrections).
-- Use Custom / User instructions to compose your own editing guidance from presets and run it on a selection or the full document.
-- Select text to enable Simplify (three brevity levels) or Proof (validity summary).
-- Navigate suggestions with arrows; accept/reject as you go. Undo restores the prior state of a change.
-- Save/restore: the app autosaves in the background, but you can also use Menu → “Save Session (.json)” / “Load Session (.json)” to move work between machines or create manual checkpoints.
-- Custom instruction: under the Style button there’s a “Custom instruction” box; enter a rule (e.g., “Check all math carefully”) and click Run Custom to analyze with that guidance.
-
-## Selections, LaTeX, and shortcuts
-- If you select text before running Grammar/Style, only that span is analyzed; we include ~2000 characters of surrounding context as read-only for the model.
-- Full-document runs strip the LaTeX preamble (everything before/after `\begin{document}` ... `\end{document}`) for analysis and map suggestions back with an offset so highlights line up.
-- Keyboard navigation (←/→/Enter/Delete) is active only when corrections are visible and focus isn’t in another input/textarea; form fields keep normal cursor movement and editing.
-
-## Custom styles
-- Add new style guides in `styles.js` by extending `window.WRITING_RULES` with `{ name, prompt, type: "style" }`.
-- Prompts should avoid grammar fixes; the grammar pass is separate.
-
-## Implementation notes
-- Uses the OpenAI Responses API with structured outputs (JSON Schema) to avoid brittle parsing.
-- Chunking stays at ~30k characters per call for large documents.
-- UI/key text updated for OpenAI; copy hints kept minimal and can be expanded later.
-
-## Structured JSON contract (for API/model and imports)
-- Grammar/Style/Custom runs must return a JSON object with a top-level `corrections` array. Each entry sets `original`, `corrected`, `explanation`, and `type` (`grammar`/`style` or `comment`). Empty results should be `{"corrections": []}` (never a bare array).
-- Comment import follows the same shape; use `type: "comment"` for no-change notes, otherwise `type: "grammar"`.
-- Simplify/Proof/Custom Ask use their own JSON schemas (see `prompt_templates.js`); they are not interchangeable with the corrections schema.
-
-## Key files
-- `index.html` — UI, OpenAI API wiring, model selection, and core logic.
-- `styles.js` — Built-in style prompts and a template for custom styles.
-- `keys.js` — Optional place to inject `window.OPENAI_API_KEY` locally.
-- `sample_comments.json` — Example corrections payload you can paste via Import JSON.
-
-# Changes relative to original version by Kevin Bryan
-
-- The core functionalities are all due to Kevin Bryan.
-- The original version was written for gemini API. The updated version is written for openai API.
-- The updated version takes direct json input and allows for "custom ask"  
+## Troubleshooting
+- “API key is missing”: modal will reappear; enter key or switch to offline import.  
+- Diff: baseline is the first loaded/run document; view/download via Global Diff.  
+- See token/cost logs in the menu’s run log or the browser console.

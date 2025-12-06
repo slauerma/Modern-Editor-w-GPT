@@ -870,7 +870,15 @@ body {
   font-family: var(--font-sans);
 }
 
-.loading-content { text-align: center; }
+.loading-content {
+  text-align: center;
+  max-width: 640px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
 .loading-spinner {
   border: 2px solid #ccc;
   border-top: 2px solid #333;
@@ -883,10 +891,11 @@ body {
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 .loading-text { font-size: 0.9rem; color: #666; font-style: italic; }
 .loading-settings {
-  margin-top: 6px;
+  margin-top: 4px;
   font-size: 0.9rem;
   color: #444;
   line-height: 1.4;
+  text-align: center;
 }
 .loading-tip {
   margin-top: 8px;
@@ -894,9 +903,12 @@ body {
   color: #555;
   max-width: 420px;
   line-height: 1.4;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
 }
 .loading-actions {
-  margin-top: 8px;
+  margin-top: 4px;
   display: flex;
   justify-content: center;
 }
@@ -1828,6 +1840,17 @@ function scheduleSessionSave() {
   sessionSaveTimer = setTimeout(trySaveSessionSnapshot, 500);
 }
 
+function showApiKeyPromptIfMissing(error) {
+  const message = (error && error.message) ? String(error.message).toLowerCase() : '';
+  if (message.includes('api key is missing')) {
+    if (loadingOverlay) loadingOverlay.style.display = 'none';
+    if (apiKeyModal) {
+      apiKeyModal.style.display = 'block';
+      if (apiKeyInput) apiKeyInput.focus();
+    }
+  }
+}
+
 function clearSavedSession() {
   try {
     localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -2746,17 +2769,18 @@ function getCurrentSettingsSummary(modelConfig) {
   const styleRule = styleSelect && styleSelect.value
     ? (window.WRITING_RULES?.[styleSelect.value]?.name || styleSelect.value)
     : '';
-  const tools = getToolsForModelConfig(modelConfig);
-  const toolLabels = [];
-  tools.forEach(t => {
-    if (t.type === 'web_search') toolLabels.push('web');
-    if (t.type === 'code_interpreter') toolLabels.push('python');
-  });
+  const toolStatus = [];
+  if (toolWebSearchCheckbox) {
+    toolStatus.push(`web: ${toolWebSearchCheckbox.checked ? 'on' : 'off'}`);
+  }
+  if (toolCodeInterpreterCheckbox) {
+    toolStatus.push(`python: ${toolCodeInterpreterCheckbox.checked ? 'on' : 'off'}`);
+  }
   const parts = [];
   if (modelLabel) parts.push(modelLabel);
   if (langText) parts.push(`Lang: ${langText}`);
   if (styleRule) parts.push(`Style: ${styleRule}`);
-  if (toolLabels.length) parts.push(`Tools: ${toolLabels.join(', ')}`);
+  if (toolStatus.length) parts.push(`Tools: ${toolStatus.join(', ')}`);
   return parts.join(' • ');
 }
 
@@ -3150,6 +3174,7 @@ async function handleAnalysis() {
     } else {
       alert(`Analysis failed: ${error.message}`);
       console.error(error);
+      showApiKeyPromptIfMissing(error);
     }
   } finally {
     loadingOverlay.style.display = 'none';
@@ -3191,6 +3216,7 @@ async function handleSimplification() {
     } else {
       alert(`Simplification failed: ${error.message}`);
       console.error(error);
+      showApiKeyPromptIfMissing(error);
     }
   } finally {
     loadingOverlay.style.display = 'none';
@@ -3225,6 +3251,7 @@ async function handleProofCheck() {
     } else {
       alert(`Proof check failed: ${error.message}`);
       console.error(error);
+      showApiKeyPromptIfMissing(error);
     }
   } finally {
     loadingOverlay.style.display = 'none';
@@ -3397,15 +3424,6 @@ function updateHighlightOverlay() {
   highlightOverlay.innerHTML = html;
   highlightOverlay.classList.toggle('has-suggestions', corrections.length > 0);
   documentInput.style.height = highlightOverlay.offsetHeight + 'px';
-
-  // Add click listeners to suggestion marks
-  highlightOverlay.querySelectorAll('.suggestion').forEach(mark => {
-    mark.addEventListener('click', (e) => {
-      const index = parseInt(e.target.dataset.index, 10);
-      currentIndex = index;
-      updateActiveCorrection({ scroll: false });
-    });
-  });
 }
 
 function escapeHtml(text) {
@@ -3482,6 +3500,15 @@ function scheduleHighlightUpdate() {
   highlightUpdateQueued = true;
   requestAnimationFrame(updateHighlightOverlay);
 }
+
+highlightOverlay.addEventListener('click', (e) => {
+  const mark = e.target.closest('.suggestion');
+  if (!mark) return;
+  const idx = Number(mark.dataset.index);
+  if (!Number.isFinite(idx)) return;
+  currentIndex = idx;
+  updateActiveCorrection({ scroll: false });
+});
 
 function abortInFlightRequest() {
   if (currentAbortController) {
@@ -4042,6 +4069,10 @@ function mapCorrectionsToPositions(correctionsArray, text, baseOffset = 0) {
     }
   }
 
+  if (unmatched.length) {
+    console.warn('Unmatched corrections (showing up to 3):', unmatched.slice(0, 3).map(item => item.original || item));
+  }
+
   return { mapped, unmatched };
 }
 
@@ -4077,29 +4108,92 @@ function mapCorrectionsStably(correctionsArray, text, baseOffset = 0) {
     }
   });
 
+  if (unmatched.length) {
+    console.warn('Unmatched corrections (showing up to 3):', unmatched.slice(0, 3).map(item => item.original || item));
+  }
+
   // Sort by start position to keep rendering consistent
   mapped.sort((a, b) => a.position.start - b.position.start);
   return { mappedCorrections: mapped, unmatchedCorrections: unmatched };
 }
 
-function buildVisualDiff(oldText, newText) {
+function buildAlignedDiffBlocks(oldText, newText) {
   const oldLines = (oldText || '').split(/\r?\n/);
   const newLines = (newText || '').split(/\r?\n/);
-  const maxLen = Math.max(oldLines.length, newLines.length);
-  const rows = [];
-  for (let i = 0; i < maxLen; i++) {
-    const o = oldLines[i] || '';
-    const n = newLines[i] || '';
-    const diff = diffWords(o, n);
-    const isSame = o === n;
-    rows.push({
-      index: i + 1,
-      originalHtml: diff.originalHtml,
-      correctedHtml: diff.correctedHtml,
-      isSame
-    });
+  const n = oldLines.length;
+  const m = newLines.length;
+  const dp = Array(n + 1);
+  for (let i = 0; i <= n; i++) {
+    dp[i] = new Array(m + 1).fill(0);
   }
-  return rows;
+
+  // LCS table
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = oldLines[i] === newLines[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  // Backtrack to ops
+  const ops = [];
+  let i = n, j = m;
+  while (i > 0 && j > 0) {
+    if (oldLines[i - 1] === newLines[j - 1]) {
+      ops.push({ type: 'equal', line: oldLines[i - 1], oldIndex: i - 1, newIndex: j - 1 });
+      i--; j--;
+    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+      ops.push({ type: 'delete', line: oldLines[i - 1], oldIndex: i - 1 });
+      i--;
+    } else {
+      ops.push({ type: 'insert', line: newLines[j - 1], newIndex: j - 1 });
+      j--;
+    }
+  }
+  while (i > 0) {
+    ops.push({ type: 'delete', line: oldLines[i - 1], oldIndex: i - 1 });
+    i--;
+  }
+  while (j > 0) {
+    ops.push({ type: 'insert', line: newLines[j - 1], newIndex: j - 1 });
+    j--;
+  }
+  ops.reverse();
+
+  // Merge into blocks (replace = delete + insert)
+  const blocks = [];
+  for (let k = 0; k < ops.length; k++) {
+    const op = ops[k];
+    if (op.type === 'equal') continue;
+
+    if (op.type === 'delete' && ops[k + 1] && ops[k + 1].type === 'insert') {
+      const ins = ops[k + 1];
+      blocks.push({
+        oldLine: op.line,
+        newLine: ins.line,
+        oldIndex: op.oldIndex,
+        newIndex: ins.newIndex
+      });
+      k++; // skip next
+    } else if (op.type === 'delete') {
+      blocks.push({
+        oldLine: op.line,
+        newLine: '',
+        oldIndex: op.oldIndex,
+        newIndex: null
+      });
+    } else if (op.type === 'insert') {
+      blocks.push({
+        oldLine: '',
+        newLine: op.line,
+        oldIndex: null,
+        newIndex: op.newIndex
+      });
+    }
+  }
+
+  return blocks;
 }
 
 function computeLineDiff(oldText, newText) {
@@ -4193,6 +4287,7 @@ async function handleCustomAsk() {
     } else {
       alert(`Custom ask failed: ${error.message}`);
       console.error(error);
+      showApiKeyPromptIfMissing(error);
     }
   } finally {
     loadingOverlay.style.display = 'none';
@@ -4526,23 +4621,26 @@ function showGlobalDiffModal() {
     return;
   }
   const currentText = documentInput.value || '';
-  const visualRows = buildVisualDiff(originalDocumentText, currentText);
+  const visualRows = buildAlignedDiffBlocks(originalDocumentText, currentText);
   if (diffContent) {
     diffContent.innerHTML = '';
     let hasDiff = false;
     visualRows.forEach(row => {
-      if (row.isSame) return;
       hasDiff = true;
+      const diff = diffWords(row.oldLine || '', row.newLine || '');
       const wrapper = document.createElement('div');
       wrapper.className = 'diff-row';
       const title = document.createElement('h4');
-      title.textContent = `Line ${row.index}`;
+      const lineLabelParts = [];
+      if (row.oldIndex !== null && row.oldIndex !== undefined) lineLabelParts.push(`Old ${row.oldIndex + 1}`);
+      if (row.newIndex !== null && row.newIndex !== undefined) lineLabelParts.push(`New ${row.newIndex + 1}`);
+      title.textContent = lineLabelParts.length ? `Line ${lineLabelParts.join(' → ')}` : 'Changed';
       const pair = document.createElement('div');
       pair.className = 'diff-pair';
 
       const orig = document.createElement('div');
       orig.className = 'diff-cell';
-      orig.innerHTML = row.originalHtml || '';
+      orig.innerHTML = diff.originalHtml || '';
 
       const arrow = document.createElement('div');
       arrow.style.minWidth = '24px';
@@ -4551,7 +4649,7 @@ function showGlobalDiffModal() {
 
       const corr = document.createElement('div');
       corr.className = 'diff-cell';
-      corr.innerHTML = row.correctedHtml || '';
+      corr.innerHTML = diff.correctedHtml || '';
 
       pair.appendChild(orig);
       pair.appendChild(arrow);
